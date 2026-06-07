@@ -43,12 +43,12 @@ RECORD_SIZE = (
     FIELD_SIZES["tipoSistema"]
 )
 
-TIPOS_NODO_LISTA = (
-    {1:"provincia"},
-    {2:"canton"},
-    {3:"distrito"}, 
-    {4:"asada"}
-    )
+# Tipos de nodo para la lista jerárquica (índice 0-based internamente)
+TIPO_PROVINCIA = 1
+TIPO_CANTON    = 2
+TIPO_DISTRITO  = 3
+TIPO_ASADA     = 4
+
 
 def _encode_str(value, size):
     """Codifica un string a bytes con padding, truncando si es necesario."""
@@ -174,15 +174,8 @@ class Registro_asada:
 
 # ─────────────────────────────────────────────────────────────
 # Nodo del árbol BSB (índice)
-# Cada nodo guarda: id_Asada, posición en el archivo principal,
-# índice lógico del hijo izquierdo y del derecho (-1 = vacío).
 # ─────────────────────────────────────────────────────────────
 
-# Formato del nodo en el archivo de índice:
-#   id_Asada  : 10 bytes (string con padding)
-#   position  :  8 bytes (long long — posición en bytes en el archivo principal)
-#   left_idx  :  4 bytes (int — índice del nodo izquierdo, -1 si no hay)
-#   right_idx :  4 bytes (int — índice del nodo derecho,  -1 si no hay)
 NODE_SIZE = 10 + 8 + 4 + 4   # = 26 bytes por nodo
 
 
@@ -190,11 +183,11 @@ class NodoArbol:
     """Nodo del árbol BSB en memoria."""
 
     def __init__(self, id_Asada: str, position: int, index: int = -1):
-        self.id_Asada  = id_Asada   # llave de búsqueda
-        self.position  = position   # posición en bytes dentro del archivo principal
-        self.index     = index      # posición de ESTE nodo en el archivo de índice
-        self.left_idx  = -1         # índice del hijo izquierdo (-1 = ninguno)
-        self.right_idx = -1         # índice del hijo derecho  (-1 = ninguno)
+        self.id_Asada  = id_Asada
+        self.position  = position
+        self.index     = index
+        self.left_idx  = -1
+        self.right_idx = -1
 
     def to_bytes(self) -> bytes:
         return (
@@ -219,10 +212,86 @@ class NodoArbol:
         return (f"Nodo(id={self.id_Asada}, pos={self.position}, "
                 f"L={self.left_idx}, R={self.right_idx})")
 
-class NodoListaJerarquica:
-    """Nodo para la lista jerárquica de ASADAS por provincia."""
 
-    def __init__(self,tipo):
-        self.tipo  = TIPOS_NODO_LISTA[tipo-1]  # tipo es un entero del 1 al 4
-        self.nombre = ""  # nombre de la provincia/cantón/distrito/asada
-        self.siguiente  = None  # puntero al siguiente nodo en la lista
+# ─────────────────────────────────────────────────────────────
+# Lista enlazada jerárquica: Provincia → Cantón → Distrito → ASADA
+#
+# Formato de cada nodo en el archivo binario (tamaño fijo):
+#   tipo          :  1 byte  (1=provincia, 2=canton, 3=distrito, 4=asada)
+#   nombre        : 80 bytes (string con padding)
+#   id_Asada      : 10 bytes (solo válido cuando tipo == 4)
+#   position      :  8 bytes (long long — posición en archivo principal; -1 si no aplica)
+#   sig_mismo_idx :  4 bytes (int — índice del siguiente nodo del mismo nivel, -1 = fin)
+#   sig_hijo_idx  :  4 bytes (int — índice del primer hijo, -1 = ninguno)
+# Total           = 107 bytes por nodo
+# ─────────────────────────────────────────────────────────────
+
+LISTA_NODO_SIZE = 1 + 80 + 10 + 8 + 4 + 4   # = 107 bytes
+
+
+class NodoListaJerarquica:
+    """
+    Nodo de la lista enlazada jerárquica.
+
+    Niveles:
+      TIPO_PROVINCIA (1) → lista de provincias
+      TIPO_CANTON    (2) → lista de cantones dentro de una provincia
+      TIPO_DISTRITO  (3) → lista de distritos dentro de un cantón
+      TIPO_ASADA     (4) → lista de ASADAS dentro de un distrito
+
+    Punteros lógicos (índices en el archivo de lista):
+      sig_mismo_idx : siguiente nodo del mismo nivel (hermano)
+      sig_hijo_idx  : primer nodo del nivel inferior (primer hijo)
+    """
+
+    def __init__(self, tipo: int, nombre: str,
+                 id_Asada: str = "", position: int = -1):
+        if tipo not in (TIPO_PROVINCIA, TIPO_CANTON, TIPO_DISTRITO, TIPO_ASADA):
+            raise ValueError(f"Tipo de nodo inválido: {tipo}. Use 1-4.")
+        self.tipo          = tipo
+        self.nombre        = nombre
+        self.id_Asada      = id_Asada   # solo para tipo 4
+        self.position      = position   # posición en archivo principal (tipo 4)
+        self.index         = -1
+        self.sig_mismo_idx = -1
+        self.sig_hijo_idx  = -1
+
+    def to_bytes(self) -> bytes:
+        """Serializa el nodo a LISTA_NODO_SIZE bytes."""
+        return (
+            struct.pack(">B", self.tipo)          +
+            _encode_str(self.nombre,   80)        +
+            _encode_str(self.id_Asada, 10)        +
+            struct.pack(">q", self.position)      +
+            struct.pack(">i", self.sig_mismo_idx) +
+            struct.pack(">i", self.sig_hijo_idx)
+        )
+
+    @staticmethod
+    def from_bytes(data: bytes, index: int) -> "NodoListaJerarquica":
+        """Deserializa LISTA_NODO_SIZE bytes a un NodoListaJerarquica."""
+        tipo          = struct.unpack(">B", data[0:1])[0]
+        nombre        = _decode_str(data[1:81])
+        id_Asada      = _decode_str(data[81:91])
+        position      = struct.unpack(">q", data[91:99])[0]
+        sig_mismo_idx = struct.unpack(">i", data[99:103])[0]
+        sig_hijo_idx  = struct.unpack(">i", data[103:107])[0]
+
+        nodo               = NodoListaJerarquica(tipo, nombre, id_Asada, position)
+        nodo.index         = index
+        nodo.sig_mismo_idx = sig_mismo_idx
+        nodo.sig_hijo_idx  = sig_hijo_idx
+        return nodo
+
+    def tipo_nombre(self) -> str:
+        """Retorna el nombre del tipo como string."""
+        return {
+            TIPO_PROVINCIA: "provincia",
+            TIPO_CANTON:    "canton",
+            TIPO_DISTRITO:  "distrito",
+            TIPO_ASADA:     "asada",
+        }.get(self.tipo, "desconocido")
+
+    def __repr__(self):
+        return (f"NodoLista(tipo={self.tipo_nombre()}, nombre={self.nombre!r}, "
+                f"idx={self.index}, sig={self.sig_mismo_idx}, hijo={self.sig_hijo_idx})")
