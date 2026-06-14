@@ -184,7 +184,7 @@ class ArbolBSB:
         self.raiz_idx = 0 if self.nodos else -1
 
     def insertar(self, id_Asada: str, position: int):
-        """Inserta un nodo en el árbol."""
+        """Inserta un nodo en el árbol de forma iterativa."""
         nuevo = NodoArbol(id_Asada, position)
 
         if self.raiz_idx == -1:
@@ -192,49 +192,53 @@ class ArbolBSB:
             self.nodos.append(nuevo)
             self.raiz_idx = 0
             self.archivo.escribir_nodo(nuevo)
-        else:
-            self._insertar_recursivo(self.raiz_idx, nuevo)
+            return
 
-    def _insertar_recursivo(self, idx_actual: int, nuevo: NodoArbol):
-        actual = self.nodos[idx_actual]
+        # Inserción iterativa — evita RecursionError con datasets grandes
+        idx_actual = self.raiz_idx
+        while True:
+            actual = self.nodos[idx_actual]
 
-        if int(nuevo.id_Asada) < int(actual.id_Asada):
-            if actual.left_idx == -1:
-                nuevo.index = len(self.nodos)
-                self.nodos.append(nuevo)
-                actual.left_idx = nuevo.index
-                self.archivo.escribir_nodo(nuevo)
-                self.archivo.escribir_nodo(actual)
+            try:
+                ir_izquierda = int(nuevo.id_Asada) < int(actual.id_Asada)
+            except ValueError:
+                ir_izquierda = nuevo.id_Asada < actual.id_Asada
+
+            if ir_izquierda:
+                if actual.left_idx == -1:
+                    nuevo.index = len(self.nodos)
+                    self.nodos.append(nuevo)
+                    actual.left_idx = nuevo.index
+                    self.archivo.escribir_nodo(nuevo)
+                    self.archivo.escribir_nodo(actual)
+                    break
+                else:
+                    idx_actual = actual.left_idx
             else:
-                self._insertar_recursivo(actual.left_idx, nuevo)
-        else:
-            if actual.right_idx == -1:
-                nuevo.index = len(self.nodos)
-                self.nodos.append(nuevo)
-                actual.right_idx = nuevo.index
-                self.archivo.escribir_nodo(nuevo)
-                self.archivo.escribir_nodo(actual)
-            else:
-                self._insertar_recursivo(actual.right_idx, nuevo)
+                if actual.right_idx == -1:
+                    nuevo.index = len(self.nodos)
+                    self.nodos.append(nuevo)
+                    actual.right_idx = nuevo.index
+                    self.archivo.escribir_nodo(nuevo)
+                    self.archivo.escribir_nodo(actual)
+                    break
+                else:
+                    idx_actual = actual.right_idx
 
     def buscar(self, id_Asada: str) -> NodoArbol | None:
-        """Busca el nodo con id_Asada en el árbol."""
-        if self.raiz_idx == -1:
-            return None
-        return self._buscar_recursivo(self.raiz_idx, id_Asada)
+        """Busca el nodo con id_Asada de forma iterativa."""
+        idx = self.raiz_idx
+        while idx != -1:
+            nodo = self.nodos[idx]
+            if id_Asada == nodo.id_Asada:
+                return nodo
+            try:
+                ir_izquierda = int(id_Asada) < int(nodo.id_Asada)
+            except ValueError:
+                ir_izquierda = id_Asada < nodo.id_Asada
 
-    def _buscar_recursivo(self, idx: int, id_Asada: str) -> NodoArbol | None:
-        if idx == -1:
-            return None
-        nodo = self.nodos[idx]
-        if id_Asada == nodo.id_Asada:
-            return nodo
-        if int(id_Asada) < int(nodo.id_Asada):
-            return self._buscar_recursivo(nodo.left_idx, id_Asada)
-        return self._buscar_recursivo(nodo.right_idx, id_Asada)
-
-    def total_nodos(self) -> int:
-        return len(self.nodos)
+            idx = nodo.left_idx if ir_izquierda else nodo.right_idx
+        return None
 
 
 # ══════════════════════════════════════════════════════════════
